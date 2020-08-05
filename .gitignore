@@ -1,6 +1,7 @@
-*.user
 *.sdf
 *.suo
+*.user
+/*.opensdf
 /bin
 /ipch
 /obj

@@ -264,14 +264,13 @@ static int _main(void)
 	DWORD time_start = GetTickCount();
 	double average_rate = -1.0;
 
-
-	const HANDLE std_in  = GetStdHandle(STD_INPUT_HANDLE);
+	const HANDLE std_inp = GetStdHandle(STD_INPUT_HANDLE);
 	const HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
 	const HANDLE std_err = GetStdHandle(STD_ERROR_HANDLE);
 
-	if (std_in == INVALID_HANDLE_VALUE)
+	if ((std_inp == INVALID_HANDLE_VALUE) || (std_out == INVALID_HANDLE_VALUE))
 	{
-		return 1;
+		goto clean_up;
 	}
 
 	for(DWORD slot_index = 0; slot_index < SLOT_COUNT; ++slot_index)
@@ -281,37 +280,43 @@ static int _main(void)
 
 	if(!(QueryPerformanceFrequency(&perf_freq) && QueryPerformanceCounter(&time_ref)))
 	{
+		print_text(std_err, "Error: Failed to read performance counters!\n");
 		goto clean_up;
 	}
 
 	if(!(g_stopping = CreateEventW(NULL, TRUE, FALSE, NULL)))
 	{
+		print_text(std_err, "Error: Failed to create event object!\n");
 		goto clean_up;
 	}
 
 	if(!(g_slots_free = CreateSemaphoreW(NULL, SLOT_COUNT, SLOT_COUNT, NULL)))
 	{
+		print_text(std_err, "Error: Failed to create semaphore!\n");
 		goto clean_up;
 	}
 
 	if(!(g_slots_used = CreateSemaphoreW(NULL, 0U, SLOT_COUNT, NULL)))
 	{
+		print_text(std_err, "Error: Failed to create semaphore!\n");
 		goto clean_up;
 	}
 
-	if(GetFileType(std_in) == FILE_TYPE_PIPE)
+	if(GetFileType(std_inp) == FILE_TYPE_PIPE)
 	{
 		const DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-		SetNamedPipeHandleState(std_in, (LPDWORD)&mode, NULL, NULL);
+		SetNamedPipeHandleState(std_inp, (LPDWORD)&mode, NULL, NULL);
 	}
 
-	if(!(thread_read = CreateThread(NULL, 0U, read_thread, std_in, 0U, NULL)))
+	if(!(thread_read = CreateThread(NULL, 0U, read_thread, std_inp, 0U, NULL)))
 	{
+		print_text(std_err, "Error: Failed to create 'read' thread!\n");
 		goto clean_up;
 	}
 
 	if(!(thread_write = CreateThread(NULL, 0U, write_thread, std_out, 0U, NULL)))
 	{
+		print_text(std_err, "Error: Failed to create 'write' thread!\n");
 		goto clean_up;
 	}
 
@@ -321,12 +326,15 @@ static int _main(void)
 	const HANDLE handles[] = { thread_read, thread_write };
 	while(WaitForMultipleObjects(2U, handles, TRUE, 2500U) == WAIT_TIMEOUT)
 	{
+		const LONG64 bytes_current = InterlockedExchange64(&g_bytes_transferred, 0LL);
 		if(QueryPerformanceCounter(&time_now))
 		{
-			const LONG64 bytes_current = InterlockedExchange64(&g_bytes_transferred, 0LL);
-			const double current_rate = static_cast<double>(bytes_current) / (static_cast<double>(time_now.QuadPart - time_ref.QuadPart) / static_cast<double>(perf_freq.QuadPart));
-			average_rate = (average_rate < 0.0) ? current_rate : ((current_rate * 0.25) + (average_rate * 0.75));
-			print_text_fmt(std_err, "\r%s [%s/s] ", format(buffer_bytes, bytes_total += bytes_current), format(buffer_rate, round64(average_rate)));
+			if(time_now.QuadPart > time_ref.QuadPart)
+			{
+				const double current_rate = static_cast<double>(bytes_current) / (static_cast<double>(time_now.QuadPart - time_ref.QuadPart) / static_cast<double>(perf_freq.QuadPart));
+				average_rate = (average_rate < 0.0) ? current_rate : ((current_rate * 0.25) + (average_rate * 0.75));
+				print_text_fmt(std_err, "\r%s [%s/s] ", format(buffer_bytes, bytes_total += bytes_current), format(buffer_rate, round64(average_rate)));
+			}
 			time_ref.QuadPart = time_now.QuadPart;
 		}
 	}
@@ -335,7 +343,7 @@ clean_up:
 
 	if(thread_read)
 	{
-		if(WaitForSingleObject(thread_read, 250U) == WAIT_TIMEOUT)
+		if(WaitForSingleObject(thread_read, 1U) == WAIT_TIMEOUT)
 		{
 			TerminateThread(thread_read, 0U);
 		}
@@ -344,7 +352,7 @@ clean_up:
 
 	if(thread_write)
 	{
-		if(WaitForSingleObject(thread_write, 250U) == WAIT_TIMEOUT)
+		if(WaitForSingleObject(thread_write, 1U) == WAIT_TIMEOUT)
 		{
 			TerminateThread(thread_write, 0U);
 		}
