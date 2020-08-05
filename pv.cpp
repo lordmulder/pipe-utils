@@ -63,6 +63,21 @@ static const char *const SIZE_UNITS[] =
 	"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB", NULL
 };
 
+static __inline LONG round(const double d)
+{
+	return (d >= double(0.0)) ? LONG(d + double(0.5)) : LONG(d - LONG(d-1) + double(0.5)) + LONG(d-1);
+}
+
+static __inline LONG64 round64(const double d)
+{
+	return (d >= double(0.0)) ? LONG64(d + double(0.5)) : LONG64(d - double(LONG64(d-1)) + double(0.5)) + LONG64(d-1);
+}
+
+static __inline DWORD bound(const DWORD min_val, const DWORD val, const DWORD max_val)
+{
+	return (val < min_val) ? min_val : ((val > max_val) ? max_val : val);
+}
+
 static number_t convert(LONG64 value)
 {
 	number_t result;
@@ -74,7 +89,7 @@ static number_t convert(LONG64 value)
 		value /= 1024U;
 	}
 	result.value = (DWORD)value;
-	result.fract = (fract * 1000U) / 1024U;
+	result.fract = bound(0U, round((static_cast<double>(fract) / 1024.0) * 1000.0), 999U);
 	return result;
 }
 
@@ -101,11 +116,6 @@ static CHAR *format(CHAR *const buffer, const LONG64 value)
 		wsprintfA(buffer, "%ld %s", number.value, SIZE_UNITS[number.unit]);
 	}
 	return buffer;
-}
-
-static __inline LONG64 round64(const double d)
-{
-	return d >= 0.0 ? LONG64(d + 0.5) : LONG64(d - LONG64(LONG64(d-1)) + 0.5) + LONG64(d-1);
 }
 
 /* ======================================================================= */
