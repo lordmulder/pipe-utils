@@ -382,7 +382,13 @@ static int _main(const WCHAR *const cmdline, const int argc, const LPWSTR *const
 	process_info_1.hThread = process_info_2.hThread = NULL;
 
 	const HANDLE wait_handles[] = { process_info_1.hProcess, process_info_2.hProcess, g_stopping };
-	WaitForMultipleObjects(3U, wait_handles, TRUE, INFINITE);
+	const DWORD wait_ret = WaitForMultipleObjects(3U, wait_handles, FALSE, INFINITE);
+
+	if((wait_ret >= WAIT_OBJECT_0) && (wait_ret <= WAIT_OBJECT_0 + 1U))
+	{
+		const HANDLE rewait_handles[] = { (wait_ret == WAIT_OBJECT_0) ? process_info_2.hProcess : process_info_1.hProcess, g_stopping };
+		WaitForMultipleObjects(2U, rewait_handles, FALSE, INFINITE);
+	}
 
 	/* ---------------------------------------------------------------------- */
 	/* Final clean-up                                                         */
