@@ -7,6 +7,8 @@
 #include <Windows.h>
 #include <ShellAPI.h>
 
+#define MAX_CMDLINE_LEN 32768
+#define MAX_PROCESSES 16U
 #define DEFAULT_PIPE_BUFFER 1048576
 
 #define __MAKE_STR(X) #X
@@ -53,7 +55,8 @@ const WCHAR *const get_env_variable(const WCHAR *const name)
 static void print_help_screen(const HANDLE output)
 {
 	print_text(output, "mkpipe [" __DATE__ "]\n\n");
-	print_text(output, "Usage:\n   mkpipe.exe <command_1> [args] \"|\" <command_2> [args]\n\n");
+	print_text(output, "Usage:\n");
+	print_text(output, "   mkpipe.exe mkpipe.exe <command_1> \"|\" <command_2> \"|\" ... \"|\" <command_n>\n\n");
 	print_text(output, "Environment variable MKPIPE_BUFFSIZE overrides buffer size.\n");
 	print_text(output, "Default buffer size is " DEFAULT_PIPE_BUFFER_STR " bytes.\n\n");
 }
@@ -131,6 +134,22 @@ static DWORD parse_number(const WCHAR *str)
 }
 
 /* ======================================================================= */
+/* Handles                                                                */
+/* ======================================================================= */
+
+static HANDLE create_inheritable_handle(HANDLE &original)
+{
+	HANDLE duplicate = INVALID_HANDLE_VALUE;
+	if(DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(), &duplicate, 0, TRUE, DUPLICATE_SAME_ACCESS))
+	{
+		CloseHandle(original);
+		original = INVALID_HANDLE_VALUE;
+		return duplicate;
+	}
+	return INVALID_HANDLE_VALUE;
+}
+
+/* ======================================================================= */
 /* Command-line parameters                                                 */
 /* ======================================================================= */
 
@@ -147,14 +166,18 @@ static bool contains_space(const WCHAR *str)
 	return false;
 }
 
-static void append_argument(WCHAR *const cmdline, const WCHAR *arg)
+static bool append_argument(WCHAR *const cmdline, const WCHAR *arg)
 {
+	const bool quoted = contains_space(arg);
 	int offset = lstrlenW(cmdline);
+	if(((offset > 0U) ? offset + 1U : offset) + lstrlenW(arg) + (quoted ? 3L : 1L) > MAX_CMDLINE_LEN)
+	{
+		return false;
+	}
 	if(offset > 0)
 	{
 		cmdline[offset++] = L' ';
 	}
-	const bool quoted = contains_space(arg);
 	if(quoted)
 	{
 		cmdline[offset++] = L'"';
@@ -176,6 +199,7 @@ static void append_argument(WCHAR *const cmdline, const WCHAR *arg)
 		cmdline[offset++] = L'"';
 	}
 	cmdline[offset] = L'\0';
+	return true;
 }
 
 /* ======================================================================= */
@@ -204,28 +228,31 @@ BOOL WINAPI ctrl_handler_routine(const DWORD type)
 /* Main                                                                    */
 /* ======================================================================= */
 
-static int _main(const WCHAR *const cmdline, const int argc, const LPWSTR *const argv)
+static int _main(const int argc, const LPWSTR *const argv)
 {
 	int result = 1;
-	HANDLE pipe_rd = INVALID_HANDLE_VALUE, pipe_wr = INVALID_HANDLE_VALUE, inherit = INVALID_HANDLE_VALUE;
-	WCHAR *command_1 = NULL, *command_2 = NULL;
+	DWORD pipe_buffer_size = DEFAULT_PIPE_BUFFER, command_count = 0U;
+	WCHAR *command[MAX_PROCESSES];
+	HANDLE pipe_rd[MAX_PROCESSES - 1U], pipe_wr[MAX_PROCESSES - 1U];
+	STARTUPINFOW startup_info[MAX_PROCESSES];
+	PROCESS_INFORMATION process_info[MAX_PROCESSES];
+
+	SecureZeroMemory(startup_info, MAX_PROCESSES * sizeof(STARTUPINFOW));
+	SecureZeroMemory(process_info, MAX_PROCESSES * sizeof(PROCESS_INFORMATION));
+
+	for(DWORD command_index = 0; command_index < MAX_PROCESSES; ++command_index)
+	{
+		command[command_index] = NULL;
+		startup_info[command_index].cb = sizeof(STARTUPINFOW);
+		if(command_index < MAX_PROCESSES - 1U)
+		{
+			pipe_rd[command_index] = pipe_wr[command_index] = INVALID_HANDLE_VALUE;
+		}
+	}
 
 	const HANDLE std_inp = GetStdHandle(STD_INPUT_HANDLE);
 	const HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
 	const HANDLE std_err = GetStdHandle(STD_ERROR_HANDLE);
-
-	STARTUPINFOW startup_info_1, startup_info_2;
-	PROCESS_INFORMATION process_info_1, process_info_2;
-
-	SecureZeroMemory(&startup_info_1, sizeof(STARTUPINFOW));
-	SecureZeroMemory(&startup_info_2, sizeof(STARTUPINFOW));
-	startup_info_1.cb = sizeof(STARTUPINFOW);
-	startup_info_2.cb = sizeof(STARTUPINFOW);
-
-	SecureZeroMemory(&process_info_1, sizeof(PROCESS_INFORMATION));
-	SecureZeroMemory(&process_info_2, sizeof(PROCESS_INFORMATION));
-
-	DWORD pipe_buffer_size = DEFAULT_PIPE_BUFFER;
 
 	if(argc < 2)
 	{
@@ -233,55 +260,84 @@ static int _main(const WCHAR *const cmdline, const int argc, const LPWSTR *const
 		goto clean_up;
 	}
 
+	if((std_inp == INVALID_HANDLE_VALUE) || (std_out == INVALID_HANDLE_VALUE))
+	{
+		print_text(std_err, "Error: Invalid standard handles!\n");
+		goto clean_up;
+	}
+
 	/* ---------------------------------------------------------------------- */
 	/* Create command-lines                                                   */
 	/* ---------------------------------------------------------------------- */
 
-	const DWORD maxlen = lstrlenW(cmdline);
-
-	command_1 = (WCHAR*) LocalAlloc(LPTR, (maxlen + 1U) * sizeof(WCHAR));
-	command_2 = (WCHAR*) LocalAlloc(LPTR, (maxlen + 1U) * sizeof(WCHAR));
-
-	if((!command_1) || (!command_2))
+	if(command[0U] = (WCHAR*) LocalAlloc(LPTR, MAX_CMDLINE_LEN * sizeof(WCHAR)))
+	{
+		command[0U][0U] = L'\0';
+	}
+	else
 	{
 		print_text(std_err, "Error: Memory allocation has failed!\n");
 		goto clean_up;
 	}
 
-	bool flag = false;
-	command_1[0U] = command_2[0U] = L'\0';
-
 	for(int i = 1; i < argc; ++i)
 	{
 		if(lstrcmpW(argv[i], L"|") == 0)
 		{
-			if(!flag)
+			if(!command[command_count][0U])
 			{
-				flag = true;
+				print_text_fmt(std_err, "Error: Command #%ld is incomplete!\n", command_count + 1U);
+				goto clean_up;
+			}
+			if(i + 1 < argc)
+			{
+				if(command_count >= MAX_PROCESSES - 1U)
+				{
+					print_text_fmt(std_err, "Error: Too many commands specified!\n", command_count);
+					goto clean_up;
+				}
+				if(!(command[++command_count] = (WCHAR*) LocalAlloc(LPTR, MAX_CMDLINE_LEN * sizeof(WCHAR))))
+				{
+					print_text(std_err, "Error: Memory allocation has failed!\n");
+					goto clean_up;
+				}
+				command[command_count][0U] = L'\0';
 			}
 			else
 			{
-				if(i + 1 < argc)
-				{
-					print_text(std_err, "Warning: Excess parameters have been ignored!\n\n");
-				}
-				break;
+				break; /*no more args*/
 			}
 		}
 		else
 		{
-			append_argument(flag ? command_2 : command_1, argv[i]);
+			if(!append_argument(command[command_count], argv[i]))
+			{
+				print_text(std_err, "Error: Command-line length exceeds the limit!\n");
+				goto clean_up;
+			}
 		}
 	}
 
-	if(!command_2[0U])
+	if(!command[command_count++][0U])
 	{
-		print_text(std_err, "Error: Second command to be executed is missing!\n\n");
+		print_text_fmt(std_err, "Error: Command #%ld is incomplete!\n", command_count);
+		goto clean_up;
+	}
+
+	if(command_count < 2U)
+	{
+		print_text_fmt(std_err, "Error: Must specify at least two commands!\n", command_count);
+		goto clean_up;
+	}
+
+	if(command_count > MAX_PROCESSES)
+	{
+		print_text_fmt(std_err, "Error: Too many commands specified!\n", command_count);
 		goto clean_up;
 	}
 
 	/* ---------------------------------------------------------------------- */
-	/* Create the pipe                                                        */
+	/* Create the pipes                                                       */
 	/* ---------------------------------------------------------------------- */
 
 	if(const WCHAR *const envstr = get_env_variable(L"MKPIPE_BUFFSIZE"))
@@ -300,10 +356,14 @@ static int _main(const WCHAR *const cmdline, const int argc, const LPWSTR *const
 		}
 	}
 
-	if(!CreatePipe(&pipe_rd, &pipe_wr, NULL, pipe_buffer_size))
+	for(DWORD command_index = 0U; command_index < command_count - 1U; ++command_index)
 	{
-		print_text(std_err, "Error: Failed to create the pipe!\n");
-		goto clean_up;
+		if(!CreatePipe(&pipe_rd[command_index], &pipe_wr[command_index], NULL, pipe_buffer_size))
+		{
+			pipe_rd[command_index] = pipe_wr[command_index] = INVALID_HANDLE_VALUE;
+			print_text(std_err, "Error: Failed to create the pipe!\n");
+			goto clean_up;
+		}
 	}
 
 	if(!(g_stopping = CreateEventW(NULL, TRUE, FALSE, NULL)))
@@ -313,82 +373,79 @@ static int _main(const WCHAR *const cmdline, const int argc, const LPWSTR *const
 	}
 
 	/* ---------------------------------------------------------------------- */
-	/* Start process #1                                                       */
+	/* Start processes                                                        */
 	/* ---------------------------------------------------------------------- */
 
-	if(!DuplicateHandle(GetCurrentProcess(), pipe_wr, GetCurrentProcess(), &inherit, 0, TRUE, DUPLICATE_SAME_ACCESS))
+	for(DWORD command_index = 0U; command_index < command_count; ++command_index)
 	{
-		print_text(std_err, "Error: Failed to create inheritable handle!\n");
-		goto clean_up;
+		startup_info[command_index].dwFlags |= STARTF_USESTDHANDLES;
+		startup_info[command_index].hStdError  = std_err;
+		startup_info[command_index].hStdInput  = (command_index > 0U) ? create_inheritable_handle(pipe_rd[command_index - 1U]) : std_inp;
+		startup_info[command_index].hStdOutput = (command_index < command_count - 1U) ? create_inheritable_handle(pipe_wr[command_index]) : std_out;
+		
+		if((startup_info[command_index].hStdInput == INVALID_HANDLE_VALUE) || (startup_info[command_index].hStdOutput == INVALID_HANDLE_VALUE))
+		{
+			print_text(std_err, "Error: Failed to create inheritable handle!\n");
+			goto clean_up;
+		}
+
+		const BOOL success = CreateProcessW(NULL, command[command_index], NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &startup_info[command_index], &process_info[command_index]);
+
+		if(startup_info[command_index].hStdInput != std_inp)
+		{
+			CloseHandle(startup_info[command_index].hStdInput);
+			
+		}
+
+		if(startup_info[command_index].hStdOutput != std_out)
+		{
+			CloseHandle(startup_info[command_index].hStdOutput);
+		}
+
+		startup_info[command_index].hStdInput = startup_info[command_index].hStdOutput = NULL;
+
+		if(!success)
+		{
+			process_info[command_index].hProcess = process_info[command_index].hThread = NULL;
+			print_text_fmt(std_err, "Error: Failed to create process #%ld!\n", command_index + 1U);
+			goto clean_up;
+		}
 	}
-
-	CloseHandle(pipe_wr);
-	pipe_wr = INVALID_HANDLE_VALUE;
-
-	startup_info_1.dwFlags |= STARTF_USESTDHANDLES;
-	startup_info_1.hStdInput = std_inp;
-	startup_info_1.hStdOutput = inherit;
-	startup_info_1.hStdError = std_err;
-
-	if(!CreateProcessW(NULL, command_1, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &startup_info_1, &process_info_1))
-	{
-		print_text(std_err, "Error: Failed to create process #1!\n");
-		goto clean_up;
-	}
-
-	CloseHandle(inherit);
-	inherit = INVALID_HANDLE_VALUE;
 
 	/* ---------------------------------------------------------------------- */
-	/* Start process #2                                                       */
+	/* Resume processes                                                       */
 	/* ---------------------------------------------------------------------- */
 
-	if(!DuplicateHandle(GetCurrentProcess(), pipe_rd, GetCurrentProcess(), &inherit, 0, TRUE, DUPLICATE_SAME_ACCESS))
+	for(DWORD command_index = 0U; command_index < command_count; ++command_index)
 	{
-		print_text(std_err, "Error: Failed to create inheritable handle!\n");
-		goto clean_up;
+		if(ResumeThread(process_info[command_index].hThread) == ((DWORD)-1))
+		{
+			print_text_fmt(std_err, "Error: Failed to resume process #%ld!\n", command_index + 1U);
+			goto clean_up;
+		}
+		CloseHandle(process_info[command_index].hThread);
+		process_info[command_index].hThread = NULL;
 	}
-
-	CloseHandle(pipe_rd);
-	pipe_rd = INVALID_HANDLE_VALUE;
-
-	startup_info_2.dwFlags |= STARTF_USESTDHANDLES;
-	startup_info_2.hStdInput = inherit;
-	startup_info_2.hStdOutput = std_out;
-	startup_info_2.hStdError = std_err;
-
-	if(!CreateProcessW(NULL, command_2, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &startup_info_2, &process_info_2))
-	{
-		print_text(std_err, "Error: Failed to create process #2!\n");
-		goto clean_up;
-	}
-
-	CloseHandle(inherit);
-	inherit = INVALID_HANDLE_VALUE;
 
 	/* ---------------------------------------------------------------------- */
 	/* Wait for process termination                                           */
 	/* ---------------------------------------------------------------------- */
 
-	if((ResumeThread(process_info_1.hThread) == ((DWORD)-1)) || (ResumeThread(process_info_2.hThread) == ((DWORD)-1)))
+	for(DWORD command_index = 0U; command_index < command_count; ++command_index)
 	{
-		print_text(std_err, "Error: Failed to resume threads!\n");
-		goto clean_up;
+		const HANDLE wait_handles[] =
+		{
+			process_info[command_index].hProcess, g_stopping
+		};
+		if(WaitForMultipleObjects(2U, wait_handles, FALSE, INFINITE) != WAIT_OBJECT_0)
+		{
+			goto clean_up;
+		}
+		CloseHandle(process_info[command_index].hProcess);
+		process_info[command_index].hProcess = NULL;
 	}
 
-	CloseHandle(process_info_1.hThread);
-	CloseHandle(process_info_2.hThread);
-
-	process_info_1.hThread = process_info_2.hThread = NULL;
-
-	const HANDLE wait_handles[] = { process_info_1.hProcess, process_info_2.hProcess, g_stopping };
-	const DWORD wait_ret = WaitForMultipleObjects(3U, wait_handles, FALSE, INFINITE);
-
-	if((wait_ret >= WAIT_OBJECT_0) && (wait_ret <= WAIT_OBJECT_0 + 1U))
-	{
-		const HANDLE rewait_handles[] = { (wait_ret == WAIT_OBJECT_0) ? process_info_2.hProcess : process_info_1.hProcess, g_stopping };
-		WaitForMultipleObjects(2U, rewait_handles, FALSE, INFINITE);
-	}
+	result = 0;
 
 	/* ---------------------------------------------------------------------- */
 	/* Final clean-up                                                         */
@@ -396,57 +453,40 @@ static int _main(const WCHAR *const cmdline, const int argc, const LPWSTR *const
 
 clean_up:
 
-	if(inherit != INVALID_HANDLE_VALUE)
+	for(DWORD command_index = 0U; command_index < MAX_PROCESSES; ++command_index)
 	{
-		CloseHandle(inherit);
-	}
-	
-	if(process_info_1.hThread)
-	{
-		CloseHandle(process_info_1.hThread);
-	}
-
-	if(process_info_2.hThread)
-	{
-		CloseHandle(process_info_2.hThread);
-	}
-
-	if(process_info_1.hProcess)
-	{
-		if(WaitForSingleObject(process_info_1.hProcess, 2500U) == WAIT_TIMEOUT)
+		if(process_info[command_index].hThread)
 		{
-			TerminateProcess(process_info_1.hProcess, 1U);
+			CloseHandle(process_info[command_index].hThread);
 		}
-		CloseHandle(process_info_1.hProcess);
-	}
-
-	if(process_info_2.hProcess)
-	{
-		if(WaitForSingleObject(process_info_2.hProcess, 2500U) == WAIT_TIMEOUT)
+		if(process_info[command_index].hProcess)
 		{
-			TerminateProcess(process_info_2.hProcess, 1U);
+			if(WaitForSingleObject(process_info[command_index].hProcess, 1000U) == WAIT_TIMEOUT)
+			{
+				TerminateProcess(process_info[command_index].hProcess, 1U);
+			}
+			CloseHandle(process_info[command_index].hProcess);
 		}
-		CloseHandle(process_info_2.hProcess);
 	}
 
-	if(pipe_rd != INVALID_HANDLE_VALUE)
+	for(DWORD command_index = 0U; command_index < MAX_PROCESSES - 1U; ++command_index)
 	{
-		CloseHandle(pipe_rd);
+		if(pipe_rd[command_index] != INVALID_HANDLE_VALUE)
+		{
+			CloseHandle(pipe_rd[command_index]);
+		}
+		if(pipe_wr[command_index] != INVALID_HANDLE_VALUE)
+		{
+			CloseHandle(pipe_wr[command_index]);
+		}
 	}
 
-	if(pipe_wr != INVALID_HANDLE_VALUE)
+	for(DWORD command_index = 0U; command_index < command_count; ++command_index)
 	{
-		CloseHandle(pipe_wr);
-	}
-
-	if(command_1)
-	{
-		LocalFree(command_1);
-	}
-
-	if(command_2)
-	{
-		LocalFree(command_2);
+		if(command[command_index])
+		{
+			LocalFree(command[command_index]);
+		}
 	}
 
 	return result;
@@ -461,14 +501,13 @@ void startup(void)
 	int argc;
 	UINT result = (UINT)(-1);
 	LPWSTR *argv;
-	const WCHAR *cmdline;
 
 	SetErrorMode(SetErrorMode(0x3) | 0x3);
 	SetConsoleCtrlHandler(ctrl_handler_routine, TRUE);
 
-	if(argv = CommandLineToArgvW(cmdline = GetCommandLineW(), &argc))
+	if(argv = CommandLineToArgvW(GetCommandLineW(), &argc))
 	{
-		result = _main(cmdline, argc, argv);
+		result = _main(argc, argv);
 		LocalFree(argv);
 	}
 
