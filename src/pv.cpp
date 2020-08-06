@@ -1,7 +1,14 @@
+/******************************************************************************/
+/* Pipe-utils, by LoRd_MuldeR <MuldeR2@GMX.de>                                */
+/* This work has been released under the CC0 1.0 Universal license!           */
+/******************************************************************************/
+
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
 #include <math.h>
 #include <intrin.h>
+
+static const double update = 0.3333;
 
 /* ======================================================================= */
 /* Global buffer                                                           */
@@ -47,21 +54,8 @@ static __inline BOOL print_text_fmt(const HANDLE output, const CHAR *const forma
 }
 
 /* ======================================================================= */
-/* Formatting                                                              */
+/* Math                                                                    */
 /* ======================================================================= */
-
-typedef struct number_t
-{
-	DWORD value;
-	DWORD fract;
-	DWORD unit;
-}
-number_t;
-
-static const char *const SIZE_UNITS[] =
-{
-	"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB", NULL
-};
 
 static __inline LONG round(const double d)
 {
@@ -77,6 +71,23 @@ static __inline DWORD bound(const DWORD min_val, const DWORD val, const DWORD ma
 {
 	return (val < min_val) ? min_val : ((val > max_val) ? max_val : val);
 }
+
+/* ======================================================================= */
+/* Formatting                                                              */
+/* ======================================================================= */
+
+typedef struct number_t
+{
+	DWORD value;
+	DWORD fract;
+	DWORD unit;
+}
+number_t;
+
+static const char *const SIZE_UNITS[] =
+{
+	"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB", NULL
+};
 
 static number_t convert(LONG64 value)
 {
@@ -124,8 +135,7 @@ static CHAR *format(CHAR *const buffer, const LONG64 value)
 
 static DWORD read_chunk(const HANDLE handle, const bool is_pipe, BYTE *const data_out)
 {
-	WORD sleep = 0U;
-	DWORD bytes_read = 0U;
+	DWORD bytes_read = 0U, sleep = 0U;
 	for(;;)
 	{
 		if(ReadFile(handle, data_out, BUFFSIZE, &bytes_read, NULL))
@@ -150,9 +160,9 @@ static DWORD read_chunk(const HANDLE handle, const bool is_pipe, BYTE *const dat
 			{
 				return 0U;
 			}
-			if(++sleep > 32U)
+			if(++sleep > 4096U)
 			{
-				Sleep((sleep > 1024U) ? 1U : 0U);
+				Sleep((sleep > 8192U) ? 1U: 0U);
 			}
 		}
 	}
@@ -262,16 +272,56 @@ static DWORD __stdcall write_thread(const LPVOID param)
 }
 
 /* ======================================================================= */
+/* Status update                                                           */
+/* ======================================================================= */
+
+static void print_status(const HANDLE std_err, LARGE_INTEGER &time_now, LARGE_INTEGER &time_ref, const LARGE_INTEGER &perf_freq, double &average_rate, LONG64 &bytes_total)
+{
+	char buffer_bytes[32U], buffer_rate[32U];
+	const LONG64 bytes_current = InterlockedExchange64(&g_bytes_transferred, 0LL);
+	if(QueryPerformanceCounter(&time_now))
+	{
+		if(time_now.QuadPart > time_ref.QuadPart)
+		{
+			const double current_rate = static_cast<double>(bytes_current) / (static_cast<double>(time_now.QuadPart - time_ref.QuadPart) / static_cast<double>(perf_freq.QuadPart));
+			average_rate = (average_rate < 0.0) ? current_rate : ((current_rate * update) + (average_rate * (1.0 - update)));
+			print_text_fmt(std_err, "\r%s [%s/s] ", format(buffer_bytes, bytes_total += bytes_current), format(buffer_rate, round64(average_rate)));
+		}
+		time_ref.QuadPart = time_now.QuadPart;
+	}
+}
+
+/* ======================================================================= */
+/* Ctrl+C handler routine                                                  */
+/* ======================================================================= */
+
+BOOL WINAPI ctrl_handler_routine(const DWORD type)
+{
+	switch(type)
+	{
+	case CTRL_C_EVENT:
+	case CTRL_BREAK_EVENT:
+	case CTRL_CLOSE_EVENT:
+	case CTRL_LOGOFF_EVENT:
+	case CTRL_SHUTDOWN_EVENT:
+		if(g_stopping)
+		{
+			SetEvent(g_stopping);
+		}
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/* ======================================================================= */
 /* Main                                                                    */
 /* ======================================================================= */
 
 static int _main(void)
 {
 	LARGE_INTEGER time_now, time_ref, perf_freq;
-	char buffer_bytes[32U], buffer_rate[32U];
 	HANDLE thread_read = NULL, thread_write = NULL;
 	LONG64 bytes_total = 0U;
-	DWORD time_start = GetTickCount();
 	double average_rate = -1.0;
 
 	const HANDLE std_inp = GetStdHandle(STD_INPUT_HANDLE);
@@ -333,21 +383,13 @@ static int _main(void)
 	SetThreadPriority(thread_read,  THREAD_PRIORITY_ABOVE_NORMAL);
 	SetThreadPriority(thread_write, THREAD_PRIORITY_ABOVE_NORMAL);
 
-	const HANDLE handles[] = { thread_read, thread_write };
-	while(WaitForMultipleObjects(2U, handles, TRUE, 2500U) == WAIT_TIMEOUT)
+	const HANDLE wait_handles[] = { thread_read, thread_write, g_stopping };
+	while(WaitForMultipleObjects(3U, wait_handles, TRUE, 2500U) == WAIT_TIMEOUT)
 	{
-		const LONG64 bytes_current = InterlockedExchange64(&g_bytes_transferred, 0LL);
-		if(QueryPerformanceCounter(&time_now))
-		{
-			if(time_now.QuadPart > time_ref.QuadPart)
-			{
-				const double current_rate = static_cast<double>(bytes_current) / (static_cast<double>(time_now.QuadPart - time_ref.QuadPart) / static_cast<double>(perf_freq.QuadPart));
-				average_rate = (average_rate < 0.0) ? current_rate : ((current_rate * 0.25) + (average_rate * 0.75));
-				print_text_fmt(std_err, "\r%s [%s/s] ", format(buffer_bytes, bytes_total += bytes_current), format(buffer_rate, round64(average_rate)));
-			}
-			time_ref.QuadPart = time_now.QuadPart;
-		}
+		print_status(std_err, time_now, time_ref, perf_freq, average_rate, bytes_total);
 	}
+
+	print_status(std_err, time_now, time_ref, perf_freq, average_rate, bytes_total);
 
 clean_up:
 
@@ -387,8 +429,13 @@ clean_up:
 	return 0;
 }
 
+/* ======================================================================= */
+/* Entry point                                                             */
+/* ======================================================================= */
+
 void startup(void)
 {
 	SetErrorMode(SetErrorMode(0x3) | 0x3);
+	SetConsoleCtrlHandler(ctrl_handler_routine, TRUE);
 	ExitProcess(_main());
 }
