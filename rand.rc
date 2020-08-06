@@ -1,0 +1,61 @@
+/////////////////////////////////////////////////////////////////////////////
+//
+// Microsoft Visual C++ generated resource script.
+//
+#define APSTUDIO_READONLY_SYMBOLS
+#include "WinResrc.h" //"afxres.h"
+#undef APSTUDIO_READONLY_SYMBOLS
+
+#include "src/version.h"
+
+#define __VERSION_STR__(X, Y, Z) #X "." #Y "." #Z
+#define _VERSION_STR_(X, Y, Z) __VERSION_STR__(X, Y, Z)
+#define VERSION_STR _VERSION_STR_(PIPEUTILS_VERSION_MAJOR, PIPEUTILS_VERSION_MINOR, PIPEUTILS_VERSION_PATCH)
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Neutral resources
+//
+#ifdef _WIN32
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+#pragma code_page(1252)
+#endif //_WIN32
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION PIPEUTILS_VERSION_MAJOR,PIPEUTILS_VERSION_MINOR,PIPEUTILS_VERSION_PATCH,0
+ PRODUCTVERSION PIPEUTILS_VERSION_MAJOR,PIPEUTILS_VERSION_MINOR,PIPEUTILS_VERSION_PATCH,0
+ FILEFLAGSMASK 0x17L
+#ifdef _DEBUG
+ FILEFLAGS 0x3L
+#else
+ FILEFLAGS 0x2L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "000004b0"
+        BEGIN
+            VALUE "ProductName", "Pipe-Utils"
+            VALUE "FileDescription", "Rand"
+            VALUE "ProductVersion", VERSION_STR
+            VALUE "FileVersion", VERSION_STR
+            VALUE "InternalName", "rand"
+            VALUE "OriginalFilename", "rand.exe"
+            VALUE "LegalCopyright", "Created by LoRd_MuldeR <MuldeR2@GMX.de>"
+            VALUE "CompanyName", "Muldersoft"
+            VALUE "LegalTrademarks", "Muldersoft"
+            VALUE "Comments", "This work has been released under the CC0 1.0 Universal license!"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0, 1200
+    END
+END

@@ -29,6 +29,12 @@
   <ItemGroup>
     <ClCompile Include="src\mkpipe.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="mkpipe.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\version.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{B0D4C057-3CCF-44AE-ACCA-30673D42890D}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>

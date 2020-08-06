@@ -29,6 +29,12 @@
   <ItemGroup>
     <ClCompile Include="src\pv.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="pv.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\version.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{D8F18E5E-C3CC-4AFD-8674-DC14CFCCAF94}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>

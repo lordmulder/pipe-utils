@@ -29,6 +29,12 @@
   <ItemGroup>
     <ClCompile Include="src\rand.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="rand.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\version.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{37879641-B663-4E2B-9D0D-C18FA937AEB7}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
