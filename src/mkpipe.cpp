@@ -59,6 +59,22 @@ static void print_help_screen(const HANDLE output)
 }
 
 /* ======================================================================= */
+/* Math                                                                    */
+/* ======================================================================= */
+
+static __inline DWORD add_safe(const DWORD a, const DWORD b)
+{
+	ULONGLONG t = ((ULONGLONG)a) + ((ULONGLONG)b);
+	return (t > MAXDWORD) ? MAXDWORD : ((DWORD)t);
+}
+
+static __inline DWORD multiply_safe(const DWORD a, const DWORD b)
+{
+	ULONGLONG t = ((ULONGLONG)a) * ((ULONGLONG)b);
+	return (t > MAXDWORD) ? MAXDWORD : ((DWORD)t);
+}
+
+/* ======================================================================= */
 /* Parse integer                                                           */
 /* ======================================================================= */
 
@@ -66,6 +82,10 @@ static DWORD parse_number(const WCHAR *str)
 {
 	bool hex_mode = false;
 	DWORD value = 0U;
+	while((*str) && (*str <= 0x20))
+	{
+		++str;
+	}
 	if((str[0U] == L'0') && ((str[1U] == L'x') || (str[1U] == L'X')))
 	{
 		hex_mode = true;
@@ -73,24 +93,37 @@ static DWORD parse_number(const WCHAR *str)
 	}
 	while(*str)
 	{
-		if((*str >= L'0') && (*str <= L'9'))
+		if(*str > 0x20)
 		{
-			value *= (hex_mode ? 16U : 10U);
-			value += (*str - L'0');
-		}
-		else if(hex_mode && (*str >= L'a') && (*str <= L'f'))
-		{
-			value *= 16U;
-			value += (*str - L'a') + 10U;
-		}
-		else if(hex_mode && (*str >= L'A') && (*str <= L'F'))
-		{
-			value *= 16U;
-			value += (*str - L'A') + 10U;
+			value = multiply_safe(value, hex_mode ? 16U : 10U);
+			if((*str >= L'0') && (*str <= L'9'))
+			{
+				value = add_safe(value, (*str - L'0'));
+			}
+			else if(hex_mode && (*str >= L'a') && (*str <= L'f'))
+			{
+				value = add_safe(value, (*str - L'a') + 10U);
+			}
+			else if(hex_mode && (*str >= L'A') && (*str <= L'F'))
+			{
+				value = add_safe(value, (*str - L'A') + 10U);
+			}
+			else
+			{
+				return 0U; /*invalid character!*/
+			}
+			++str;
 		}
 		else
 		{
-			return 0U; /*invalid chareacter*/
+			break; /*break at space!*/
+		}
+	}
+	while(*str)
+	{
+		if(*str > 0x20)
+		{
+			return 0U; /*character after space!*/
 		}
 		++str;
 	}
@@ -258,7 +291,7 @@ static int _main(const WCHAR *const cmdline, const int argc, const LPWSTR *const
 			const DWORD value = parse_number(envstr);
 			if(value > 0U)
 			{
-				pipe_buffer_size = (value > 0U) ? ((value >= 1024U) ? value : 1024U) : DEFAULT_PIPE_BUFFER;
+				pipe_buffer_size = (value >= 1024U) ? value : 1024U;
 			}
 			else
 			{
