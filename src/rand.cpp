@@ -115,7 +115,7 @@ static int _main(void)
 		{
 			if (!WriteFile(std_out, ((BYTE*)buffer) + offset, BUFFSIZE_BYTES - offset, &bytes_written, NULL))
 			{
-				goto exit_loop;
+				goto exit_loop; /*failed*/
 			}
 			if(bytes_written < 1U)
 			{
@@ -125,6 +125,10 @@ static int _main(void)
 				}
 				if(sleep_timeout++)
 				{
+					if(WaitForSingleObject(g_stopping, 0U) == WAIT_OBJECT_0)
+					{
+						goto exit_loop; /*stop*/
+					}
 					Sleep(sleep_timeout >> 8);
 				}
 			}

@@ -54,6 +54,17 @@ static __inline BOOL print_text_fmt(const HANDLE output, const CHAR *const forma
 }
 
 /* ======================================================================= */
+/* Environment                                                             */
+/* ======================================================================= */
+
+const WCHAR *const get_env_variable(const WCHAR *const name)
+{
+	static WCHAR env_buffer[256U];
+	const DWORD ret = GetEnvironmentVariableW(name, env_buffer, 256U);
+	return ((ret > 0U) && (ret < 256U)) ? env_buffer : NULL;
+}
+
+/* ======================================================================= */
 /* Math                                                                    */
 /* ======================================================================= */
 
@@ -159,6 +170,10 @@ static DWORD read_chunk(const HANDLE handle, const bool is_pipe, BYTE *const dat
 		}
 		if(sleep_timeout++)
 		{
+			if(WaitForSingleObject(g_stopping, 0U) == WAIT_OBJECT_0)
+			{
+				return 0U; /*stop*/
+			}
 			Sleep(sleep_timeout >> 8);
 		}
 	}
@@ -181,6 +196,10 @@ static bool write_chunk(const HANDLE handle, const bool is_pipe, const BYTE *con
 			}
 			if(sleep_timeout++)
 			{
+				if(WaitForSingleObject(g_stopping, 0U) == WAIT_OBJECT_0)
+				{
+					return 0U; /*stop*/
+				}
 				Sleep(sleep_timeout >> 8);
 			}
 		}
@@ -365,10 +384,20 @@ static int _main(void)
 		goto clean_up;
 	}
 
-	if(GetFileType(std_inp) == FILE_TYPE_PIPE)
+	if(const WCHAR *const envstr = get_env_variable(L"PV_FORCE_NOWAIT"))
 	{
-		const DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-		SetNamedPipeHandleState(std_inp, (LPDWORD)&mode, NULL, NULL);
+		if(envstr[0U] && (GetFileType(std_inp) == FILE_TYPE_PIPE))
+		{
+			if((lstrcmpiW(envstr, L"1") == 0) || (lstrcmpiW(envstr, L"yes") == 0) || (lstrcmpiW(envstr, L"true") == 0))
+			{
+				if(GetFileType(std_inp) == FILE_TYPE_PIPE)
+				{
+					print_text(std_err, "PIPE_NOWAIT\n");
+					const DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+					SetNamedPipeHandleState(std_inp, (LPDWORD)&mode, NULL, NULL);
+				}
+			}
+		}
 	}
 
 	if(!(thread_read = CreateThread(NULL, 0U, read_thread, std_inp, 0U, NULL)))

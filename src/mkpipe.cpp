@@ -41,6 +41,10 @@ static __inline BOOL print_text_fmt(const HANDLE output, const CHAR *const forma
 	return result;
 }
 
+/* ======================================================================= */
+/* Environment                                                             */
+/* ======================================================================= */
+
 const WCHAR *const get_env_variable(const WCHAR *const name)
 {
 	static WCHAR env_buffer[256U];
