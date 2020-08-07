@@ -94,12 +94,12 @@ static int _main(void)
 		return 1;
 	}
 
-
+	const bool is_pipe = (GetFileType(std_out) == FILE_TYPE_PIPE);
 	random_seed(&state);
 
 	for(;;)
 	{
-		bool fail_flag = false;
+		DWORD bytes_written = 0U, sleep_timeout = 0U;
 		if(!(++check))
 		{
 			if(WaitForSingleObject(g_stopping, 0U) == WAIT_OBJECT_0)
@@ -107,29 +107,27 @@ static int _main(void)
 				goto exit_loop;
 			}
 		}
-		for (DWORD i = 0U; i < BUFFSIZE; ++i)
+		for (DWORD offset = 0U; offset < BUFFSIZE; ++offset)
 		{
-			buffer[i] = random_next(&state);
+			buffer[offset] = random_next(&state);
 		}
-		for (DWORD pos = 0U; pos < BUFFSIZE_BYTES; pos += bytes_written)
+		for (DWORD offset = 0U; offset < BUFFSIZE_BYTES; offset += bytes_written)
 		{
-			if (!WriteFile(std_out, ((BYTE*)buffer) + pos, BUFFSIZE_BYTES - pos, &bytes_written, NULL))
+			if (!WriteFile(std_out, ((BYTE*)buffer) + offset, BUFFSIZE_BYTES - offset, &bytes_written, NULL))
 			{
 				goto exit_loop;
 			}
-			if (bytes_written < 1U)
+			if(bytes_written < 1U)
 			{
-				if(!fail_flag)
+				if(!is_pipe)
 				{
-					fail_flag = true;
-					continue;
+					goto exit_loop; /*failed*/
 				}
-				else
+				if(sleep_timeout++)
 				{
-					goto exit_loop;
+					Sleep(sleep_timeout >> 8);
 				}
 			}
-			fail_flag = false;
 		}
 	}
 

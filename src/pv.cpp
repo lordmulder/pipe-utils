@@ -135,52 +135,54 @@ static CHAR *format(CHAR *const buffer, const LONG64 value)
 
 static DWORD read_chunk(const HANDLE handle, const bool is_pipe, BYTE *const data_out)
 {
-	DWORD bytes_read = 0U, sleep = 0U;
+	DWORD bytes_read = 0U, sleep_timeout = 0U;
 	for(;;)
 	{
 		if(ReadFile(handle, data_out, BUFFSIZE, &bytes_read, NULL))
 		{
-			sleep = 0U;
 			if(bytes_read > 0U)
 			{
 				return bytes_read;
 			}
-			else
+			else if(!is_pipe)
 			{
-				if(!is_pipe)
-				{
-					return 0U;
-				}
+				return 0U; /*EOF*/
 			}
 		}
 		else
 		{
 			const DWORD error = GetLastError();
-			if(error != ERROR_NO_DATA)
+			if((!is_pipe) || (error != ERROR_NO_DATA))
 			{
-				return 0U;
+				return 0U; /*failed*/
 			}
-			if(++sleep > 4096U)
-			{
-				Sleep((sleep > 8192U) ? 1U: 0U);
-			}
+		}
+		if(sleep_timeout++)
+		{
+			Sleep(sleep_timeout >> 8);
 		}
 	}
 }
 
-static bool write_chunk(const HANDLE handle, const BYTE *const data, const DWORD data_len)
+static bool write_chunk(const HANDLE handle, const bool is_pipe, const BYTE *const data, const DWORD data_len)
 {
-	DWORD bytes_written = 0U;
+	DWORD bytes_written = 0U, sleep_timeout = 0U;
 	for(DWORD offset = 0U; offset < data_len; offset += bytes_written)
 	{
-		bool success = false;
-		if(WriteFile(handle, data + offset, data_len - offset, &bytes_written, NULL))
+		if(!WriteFile(handle, data + offset, data_len - offset, &bytes_written, NULL))
 		{
-			success = (bytes_written > 0U);
+			return false; /*failed*/
 		}
-		if(!success)
+		if(bytes_written < 1U)
 		{
-			return false;
+			if(!is_pipe)
+			{
+				return false; /*failed*/
+			}
+			if(sleep_timeout++)
+			{
+				Sleep(sleep_timeout >> 8);
+			}
 		}
 	}
 	return true;
@@ -233,6 +235,7 @@ static DWORD __stdcall read_thread(const LPVOID param)
 static DWORD __stdcall write_thread(const LPVOID param)
 {
 	LONG slot_index = 0U;
+	const bool is_pipe = (GetFileType((HANDLE)param) == FILE_TYPE_PIPE);
 
 	for(;;)
 	{
@@ -256,7 +259,7 @@ static DWORD __stdcall write_thread(const LPVOID param)
 
 		EnterCriticalSection(&lock[slot_index]);
 
-		if(!write_chunk((HANDLE)param, buffer[slot_index], buffer_len[slot_index]))
+		if(!write_chunk((HANDLE)param, is_pipe, buffer[slot_index], buffer_len[slot_index]))
 		{
 			LeaveCriticalSection(&lock[slot_index]);
 			SetEvent(g_stopping);
@@ -346,19 +349,19 @@ static int _main(void)
 
 	if(!(g_stopping = CreateEventW(NULL, TRUE, FALSE, NULL)))
 	{
-		print_text(std_err, "Error: Failed to create event object!\n");
+		print_text(std_err, "Error: Failed to create 'stopping' event!\n");
 		goto clean_up;
 	}
 
 	if(!(g_slots_free = CreateSemaphoreW(NULL, SLOT_COUNT, SLOT_COUNT, NULL)))
 	{
-		print_text(std_err, "Error: Failed to create semaphore!\n");
+		print_text(std_err, "Error: Failed to create 'slots_free' semaphore!\n");
 		goto clean_up;
 	}
 
 	if(!(g_slots_used = CreateSemaphoreW(NULL, 0U, SLOT_COUNT, NULL)))
 	{
-		print_text(std_err, "Error: Failed to create semaphore!\n");
+		print_text(std_err, "Error: Failed to create 'slots_used' semaphore!\n");
 		goto clean_up;
 	}
 
@@ -395,18 +398,18 @@ clean_up:
 
 	if(thread_read)
 	{
-		if(WaitForSingleObject(thread_read, 1U) == WAIT_TIMEOUT)
+		if(WaitForSingleObject(thread_read, 1000U) == WAIT_TIMEOUT)
 		{
-			TerminateThread(thread_read, 0U);
+			TerminateThread(thread_read, 1U);
 		}
 		CloseHandle(thread_read);
 	}
 
 	if(thread_write)
 	{
-		if(WaitForSingleObject(thread_write, 1U) == WAIT_TIMEOUT)
+		if(WaitForSingleObject(thread_write, 1000U) == WAIT_TIMEOUT)
 		{
-			TerminateThread(thread_write, 0U);
+			TerminateThread(thread_write, 1U);
 		}
 		CloseHandle(thread_write);
 	}
