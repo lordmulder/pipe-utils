@@ -3,15 +3,27 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
+#include "version.h"
+
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
+#include <ShellAPI.h>
 
 #define BUFFSIZE (16384U / sizeof(DWORD))
 #define BUFFSIZE_BYTES (sizeof(DWORD) * BUFFSIZE)
 
 static DWORD buffer[BUFFSIZE];
-
 static HANDLE g_stopping = NULL;
+
+/* ======================================================================= */
+/* Text output                                                             */
+/* ======================================================================= */
+
+static __inline BOOL print_text(const HANDLE output, const CHAR *const text)
+{
+	DWORD bytes_written;
+	return WriteFile(output, text, lstrlenA(text), &bytes_written, NULL);
+}
 
 /* ======================================================================= */
 /* Pseduo-random number generator                                          */
@@ -78,19 +90,43 @@ BOOL WINAPI ctrl_handler_routine(const DWORD type)
 }
 
 /* ======================================================================= */
+/* Help screen                                                             */
+/* ======================================================================= */
+
+#define __VERSION_STR(X, Y, Z) #X "." #Y "." #Z
+#define _VERSION_STR(X, Y, Z) __VERSION_STR(X, Y, Z)
+#define VERSION_STR _VERSION_STR(PIPEUTILS_VERSION_MAJOR, PIPEUTILS_VERSION_MINOR, PIPEUTILS_VERSION_PATCH)
+
+static void print_help_screen(const HANDLE output)
+{
+	print_text(output, "rand v" VERSION_STR " [" __DATE__ "], by LoRd_MuldeR <MuldeR2@GMX.de>\n\n");
+	print_text(output, "Fast generator of pseudo-random bytes, using the \"xorwow\" method.\n");
+	print_text(output, "Output has been verified to pass the Dieharder test suite.\n\n");
+}
+
+/* ======================================================================= */
 /* Main                                                                    */
 /* ======================================================================= */
 
-static int _main(void)
+static int _main(const int argc, const LPWSTR *const argv)
 {
 	random_t state;
 	g_stopping = CreateEventW(NULL, TRUE, FALSE, NULL);
 	BYTE check = 0U;
 	DWORD bytes_written = 0U;
 
+	const HANDLE std_err = GetStdHandle(STD_ERROR_HANDLE);
 	const HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
+
+	if((argc >= 2) && ((lstrcmpW(argv[1], L"-h") == 0) || (lstrcmpW(argv[1], L"-?") == 0) || (lstrcmpW(argv[1], L"/?") == 0)))
+	{
+		print_help_screen(std_err);
+		return 1;
+	}
+
 	if (std_out == INVALID_HANDLE_VALUE)
 	{
+		print_text(std_err, "Error: Failed to initialize output stream!\n");
 		return 1;
 	}
 
@@ -146,7 +182,18 @@ exit_loop:
 
 void startup(void)
 {
+	int argc;
+	UINT result = (UINT)(-1);
+	LPWSTR *argv;
+
 	SetErrorMode(SetErrorMode(0x3) | 0x3);
 	SetConsoleCtrlHandler(ctrl_handler_routine, TRUE);
-	ExitProcess(_main());
+
+	if(argv = CommandLineToArgvW(GetCommandLineW(), &argc))
+	{
+		result = _main(argc, argv);
+		LocalFree(argv);
+	}
+
+	ExitProcess(result);
 }

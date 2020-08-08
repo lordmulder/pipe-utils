@@ -3,6 +3,8 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
+#include "version.h"
+
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
 #include <ShellAPI.h>
@@ -63,9 +65,14 @@ const WCHAR *const get_env_variable(const WCHAR *const name)
 /* Help screen                                                             */
 /* ======================================================================= */
 
+#define __VERSION_STR(X, Y, Z) #X "." #Y "." #Z
+#define _VERSION_STR(X, Y, Z) __VERSION_STR(X, Y, Z)
+#define VERSION_STR _VERSION_STR(PIPEUTILS_VERSION_MAJOR, PIPEUTILS_VERSION_MINOR, PIPEUTILS_VERSION_PATCH)
+
 static void print_help_screen(const HANDLE output)
 {
-	print_text(output, "mkpipe [" __DATE__ "]\n\n");
+	print_text(output, "mkpipe v" VERSION_STR " [" __DATE__ "], by LoRd_MuldeR <MuldeR2@GMX.de>\n\n");
+	print_text(output, "Connect N processes via pipe(s), with configurable pipe buffer size.\n\n");
 	print_text(output, "Usage:\n");
 	print_text(output, "   mkpipe.exe <command_1> \"|\" <command_2> \"|\" ... \"|\" <command_n>\n");
 	print_text(output, "   mkpipe.exe \"<\" <input_file> [commands 1...n] \">\" <output_file>\n\n");
@@ -327,7 +334,7 @@ static int _main(const int argc, const LPWSTR *const argv)
 	const HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
 	const HANDLE std_err = GetStdHandle(STD_ERROR_HANDLE);
 
-	if(argc < 2)
+	if((argc < 2) || (lstrcmpW(argv[1], L"-h") == 0) || (lstrcmpW(argv[1], L"-?") == 0) || (lstrcmpW(argv[1], L"/?") == 0))
 	{
 		print_help_screen(std_err);
 		goto clean_up;

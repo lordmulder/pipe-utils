@@ -3,9 +3,11 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
+#include "version.h"
+
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
-#include <math.h>
+#include <ShellAPI.h>
 #include <intrin.h>
 
 static const double update = 0.3333;
@@ -336,10 +338,25 @@ BOOL WINAPI ctrl_handler_routine(const DWORD type)
 }
 
 /* ======================================================================= */
+/* Help screen                                                             */
+/* ======================================================================= */
+
+#define __VERSION_STR(X, Y, Z) #X "." #Y "." #Z
+#define _VERSION_STR(X, Y, Z) __VERSION_STR(X, Y, Z)
+#define VERSION_STR _VERSION_STR(PIPEUTILS_VERSION_MAJOR, PIPEUTILS_VERSION_MINOR, PIPEUTILS_VERSION_PATCH)
+
+static void print_help_screen(const HANDLE output)
+{
+	print_text(output, "pv v" VERSION_STR " [" __DATE__ "], by LoRd_MuldeR <MuldeR2@GMX.de>\n\n");
+	print_text(output, "Measure the throughput of a pipe and the amount of data transferred.\n");
+	print_text(output, "Set environment variable PV_FORCE_NOWAIT=1 to force \"async\" mode.\n\n");
+}
+
+/* ======================================================================= */
 /* Main                                                                    */
 /* ======================================================================= */
 
-static int _main(void)
+static int _main(const int argc, const LPWSTR *const argv)
 {
 	LARGE_INTEGER time_now, time_ref, perf_freq;
 	HANDLE thread_read = NULL, thread_write = NULL;
@@ -358,6 +375,12 @@ static int _main(void)
 	for(DWORD slot_index = 0; slot_index < SLOT_COUNT; ++slot_index)
 	{
 		InitializeCriticalSection(&lock[slot_index]);
+	}
+
+	if((argc >= 2) && ((lstrcmpW(argv[1], L"-h") == 0) || (lstrcmpW(argv[1], L"-?") == 0) || (lstrcmpW(argv[1], L"/?") == 0)))
+	{
+		print_help_screen(std_err);
+		goto clean_up;
 	}
 
 	if(!(QueryPerformanceFrequency(&perf_freq) && QueryPerformanceCounter(&time_ref)))
@@ -467,7 +490,18 @@ clean_up:
 
 void startup(void)
 {
+	int argc;
+	UINT result = (UINT)(-1);
+	LPWSTR *argv;
+
 	SetErrorMode(SetErrorMode(0x3) | 0x3);
 	SetConsoleCtrlHandler(ctrl_handler_routine, TRUE);
-	ExitProcess(_main());
+
+	if(argv = CommandLineToArgvW(GetCommandLineW(), &argc))
+	{
+		result = _main(argc, argv);
+		LocalFree(argv);
+	}
+
+	ExitProcess(result);
 }
