@@ -26,6 +26,8 @@ copy /Y "%~dp0.\bin\Win32\Release\*.exe"      "%~dp0.\out\~package"
 copy /Y "%~dp0.\bin\Win32\Release_SSE2\*.exe" "%~dp0.\out\~package\sse2"
 copy /Y "%~dp0.\bin\x64\Release\*.exe"        "%~dp0.\out\~package\x64"
 
+attrib +R "%~dp0.\out\~package\*.*" /S
+
 echo.
 echo PACKAGE COMPLETED.
 echo.
