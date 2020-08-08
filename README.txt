@@ -7,4 +7,4 @@ rand   - fast generator of pseudo-random bytes, using "xorwow" method
 
 Example:
   set MKPIPE_BUFFSIZE=1048576
-  mkpipe.exe rand.exe "|" pv.exe > NUL
+  mkpipe.exe rand.exe "|" pv.exe ">" NUL
