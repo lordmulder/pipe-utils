@@ -17,6 +17,13 @@
 
 static HANDLE g_stopping = NULL;
 
+#define ARGV_IS_VALID(N) \
+	(((N) < argc) && \
+	argv[(N)][0U] && \
+	(lstrcmpW(argv[(N)], L"|") != 0) && \
+	(lstrcmpW(argv[(N)], L"<") != 0) && \
+	(lstrcmpW(argv[(N)], L">") != 0))
+
 /* ======================================================================= */
 /* Text output                                                             */
 /* ======================================================================= */
@@ -60,9 +67,11 @@ static void print_help_screen(const HANDLE output)
 {
 	print_text(output, "mkpipe [" __DATE__ "]\n\n");
 	print_text(output, "Usage:\n");
-	print_text(output, "   mkpipe.exe mkpipe.exe <command_1> \"|\" <command_2> \"|\" ... \"|\" <command_n>\n\n");
-	print_text(output, "Environment variable MKPIPE_BUFFSIZE overrides buffer size.\n");
+	print_text(output, "   mkpipe.exe <command_1> \"|\" <command_2> \"|\" ... \"|\" <command_n>\n");
+	print_text(output, "   mkpipe.exe \"<\" <input_file> [commands 1...n] \">\" <output_file>\n\n");
+	print_text(output, "Environment variable MKPIPE_BUFFSIZE can be used to override buffer size.\n");
 	print_text(output, "Default buffer size is " DEFAULT_PIPE_BUFFER_STR " bytes.\n\n");
+	print_text(output, "Operators '|', '<' and '>' must be *quoted* when running from the shell!\n\n");
 }
 
 /* ======================================================================= */
@@ -138,17 +147,46 @@ static DWORD parse_number(const WCHAR *str)
 }
 
 /* ======================================================================= */
-/* Handles                                                                */
+/* I/O functions                                                           */
 /* ======================================================================= */
 
-static HANDLE create_inheritable_handle(HANDLE &original)
+static HANDLE create_inheritable_handle(const HANDLE std_stream_1, const HANDLE std_stream_2, HANDLE &original)
 {
 	HANDLE duplicate = INVALID_HANDLE_VALUE;
 	if(DuplicateHandle(GetCurrentProcess(), original, GetCurrentProcess(), &duplicate, 0, TRUE, DUPLICATE_SAME_ACCESS))
 	{
-		CloseHandle(original);
-		original = INVALID_HANDLE_VALUE;
+		if((original != std_stream_1) && (original != std_stream_2))
+		{
+			CloseHandle(original);
+			original = INVALID_HANDLE_VALUE;
+		}
 		return duplicate;
+	}
+	return INVALID_HANDLE_VALUE;
+}
+
+static const HANDLE open_file(const WCHAR *const file_name, const BOOL write_mode)
+{
+	HANDLE handle = INVALID_HANDLE_VALUE;
+	DWORD retry;
+	for(retry = 0U; retry < 32U; ++retry)
+	{
+		if(retry > 0U)
+		{
+			Sleep(retry); /*delay before retry*/
+		}
+		if((handle = CreateFileW(file_name, write_mode ? GENERIC_WRITE : GENERIC_READ, write_mode ? 0U: FILE_SHARE_READ, NULL, write_mode ? CREATE_ALWAYS : OPEN_EXISTING, 0, NULL)) == INVALID_HANDLE_VALUE)
+		{
+			const DWORD error = GetLastError();
+			if(((!write_mode) && (error == ERROR_FILE_NOT_FOUND)) || (error == ERROR_PATH_NOT_FOUND) || (error == ERROR_INVALID_NAME))
+			{
+				break;
+			}
+		}
+		else
+		{
+			return handle;
+		}
 	}
 	return INVALID_HANDLE_VALUE;
 }
@@ -170,14 +208,33 @@ static bool contains_space(const WCHAR *str)
 	return false;
 }
 
-static bool append_argument(WCHAR *const cmdline, const WCHAR *arg)
+static int cmdline_required_size(int offset, const bool quoted, const WCHAR *arg)
 {
-	const bool quoted = contains_space(arg);
-	int offset = lstrlenW(cmdline);
-	if(((offset > 0U) ? offset + 1U : offset) + lstrlenW(arg) + (quoted ? 3L : 1L) > MAX_CMDLINE_LEN)
+	if(offset > 0)
 	{
-		return false;
+		++offset;
 	}
+	if(quoted)
+	{
+		offset += 2U;
+	}
+	while(*arg)
+	{
+		if(*arg >= L' ')
+		{
+			if(*arg == L'"')
+			{
+				++offset;
+			}
+			++offset;
+		}
+		arg++;
+	}
+	return offset;
+}
+
+static void cmdline_force_append(WCHAR *const cmdline, int offset, const bool quoted, const WCHAR *arg)
+{
 	if(offset > 0)
 	{
 		cmdline[offset++] = L' ';
@@ -203,7 +260,18 @@ static bool append_argument(WCHAR *const cmdline, const WCHAR *arg)
 		cmdline[offset++] = L'"';
 	}
 	cmdline[offset] = L'\0';
-	return true;
+}
+
+static bool append_argument(WCHAR *const cmdline, const WCHAR *const arg)
+{
+	const bool quoted = contains_space(arg);
+	const int offset = lstrlenW(cmdline);
+	if(cmdline_required_size(offset, quoted, arg) < MAX_CMDLINE_LEN)
+	{
+		cmdline_force_append(cmdline, offset, quoted, arg);
+		return true;
+	}
+	return false; /*too long*/
 }
 
 /* ======================================================================= */
@@ -236,8 +304,9 @@ static int _main(const int argc, const LPWSTR *const argv)
 {
 	int result = 1;
 	DWORD pipe_buffer_size = DEFAULT_PIPE_BUFFER, command_count = 0U;
-	WCHAR *command[MAX_PROCESSES];
+	WCHAR *command[MAX_PROCESSES], *input_file = NULL, *output_file = NULL;
 	HANDLE pipe_rd[MAX_PROCESSES - 1U], pipe_wr[MAX_PROCESSES - 1U];
+	HANDLE stream_inp = INVALID_HANDLE_VALUE, stream_out = INVALID_HANDLE_VALUE;
 	STARTUPINFOW startup_info[MAX_PROCESSES];
 	PROCESS_INFORMATION process_info[MAX_PROCESSES];
 
@@ -274,69 +343,106 @@ static int _main(const int argc, const LPWSTR *const argv)
 	/* Create command-lines                                                   */
 	/* ---------------------------------------------------------------------- */
 
-	if(command[0U] = (WCHAR*) LocalAlloc(LPTR, MAX_CMDLINE_LEN * sizeof(WCHAR)))
-	{
-		command[0U][0U] = L'\0';
-	}
-	else
-	{
-		print_text(std_err, "Error: Memory allocation has failed!\n");
-		goto clean_up;
-	}
-
 	for(int i = 1; i < argc; ++i)
 	{
 		if(lstrcmpW(argv[i], L"|") == 0)
 		{
-			if(!command[command_count][0U])
+			if(command_count >= MAX_PROCESSES - 1U)
 			{
-				print_text_fmt(std_err, "Error: Command #%ld is incomplete!\n", command_count + 1U);
+				print_text_fmt(std_err, "Error: Too many commands specified! (Limit: %ld)\n", MAX_PROCESSES);
 				goto clean_up;
 			}
-			if(i + 1 < argc)
+			++command_count;
+		}
+		else if(lstrcmpW(argv[i], L"<") == 0)
+		{
+			if(ARGV_IS_VALID(i + 1))
 			{
-				if(command_count >= MAX_PROCESSES - 1U)
+				if(input_file && input_file[0U])
 				{
-					print_text_fmt(std_err, "Error: Too many commands specified!\n", command_count);
+					print_text(std_err, "Error: Input file was specified more than once!\n");
 					goto clean_up;
 				}
-				if(!(command[++command_count] = (WCHAR*) LocalAlloc(LPTR, MAX_CMDLINE_LEN * sizeof(WCHAR))))
+				input_file = argv[++i];
+			}
+			else
+			{
+				print_text(std_err, "Error: Input file name is missing!\n");
+				goto clean_up;
+			}
+		}
+		else if(lstrcmpW(argv[i], L">") == 0)
+		{
+			if(ARGV_IS_VALID(i + 1))
+			{
+				if(output_file && output_file[0U])
+				{
+					print_text(std_err, "Error: Output file was specified more than once!\n");
+					goto clean_up;
+				}
+				output_file = argv[++i];
+			}
+			else
+			{
+				print_text(std_err, "Error: Output file name is missing!\n");
+				goto clean_up;
+			}
+		}
+		else
+		{
+			if(!command[command_count])
+			{
+				if(!(command[command_count] = (WCHAR*) LocalAlloc(LPTR, MAX_CMDLINE_LEN * sizeof(WCHAR))))
 				{
 					print_text(std_err, "Error: Memory allocation has failed!\n");
 					goto clean_up;
 				}
 				command[command_count][0U] = L'\0';
 			}
-			else
-			{
-				break; /*no more args*/
-			}
-		}
-		else
-		{
 			if(!append_argument(command[command_count], argv[i]))
 			{
-				print_text(std_err, "Error: Command-line length exceeds the limit!\n");
+				print_text(std_err, "Error: Command-line length exceeds the allowable limit!\n");
 				goto clean_up;
 			}
 		}
 	}
 
-	if(!command[command_count++][0U])
+	++command_count;
+
+	/* ---------------------------------------------------------------------- */
+	/* Validate command-lines                                                 */
+	/* ---------------------------------------------------------------------- */
+
+	for(DWORD command_index = 0U; command_index < command_count; ++command_index)
 	{
-		print_text_fmt(std_err, "Error: Command #%ld is incomplete!\n", command_count);
-		goto clean_up;
+		if((!command[command_index]) || (!command[command_index][0U]))
+		{
+			print_text_fmt(std_err, "Error: Command #%ld is incomplete!\n", command_index + 1U);
+			goto clean_up;
+		}
 	}
 
 	if(command_count < 2U)
 	{
-		print_text_fmt(std_err, "Error: Must specify at least two commands!\n", command_count);
+		print_text(std_err, "Error: Must specify *at least* two commands!\n");
 		goto clean_up;
 	}
 
-	if(command_count > MAX_PROCESSES)
+	/* ---------------------------------------------------------------------- */
+	/* Open input/output files                                                */
+	/* ---------------------------------------------------------------------- */
+
+	stream_inp = (input_file) ? open_file(input_file, false) : std_inp;
+	if(stream_inp == INVALID_HANDLE_VALUE)
 	{
-		print_text_fmt(std_err, "Error: Too many commands specified!\n", command_count);
+		print_text(std_err, "Error: Failed to open the input file for reading!\n");
+		goto clean_up;
+	}
+
+	stream_out = (output_file) ? open_file(output_file, true) : std_out;
+	if(stream_out == INVALID_HANDLE_VALUE)
+	{
+		print_text(std_err, "Error: Failed to open the output file for writing!\n");
 		goto clean_up;
 	}
 
@@ -384,8 +490,8 @@ static int _main(const int argc, const LPWSTR *const argv)
 	{
 		startup_info[command_index].dwFlags |= STARTF_USESTDHANDLES;
 		startup_info[command_index].hStdError  = std_err;
-		startup_info[command_index].hStdInput  = (command_index > 0U) ? create_inheritable_handle(pipe_rd[command_index - 1U]) : std_inp;
-		startup_info[command_index].hStdOutput = (command_index < command_count - 1U) ? create_inheritable_handle(pipe_wr[command_index]) : std_out;
+		startup_info[command_index].hStdInput  = create_inheritable_handle(std_inp, std_out, (command_index > 0U) ? pipe_rd[command_index - 1U] : stream_inp);
+		startup_info[command_index].hStdOutput = create_inheritable_handle(std_inp, std_out, (command_index < command_count - 1U) ? pipe_wr[command_index] : stream_out);
 		
 		if((startup_info[command_index].hStdInput == INVALID_HANDLE_VALUE) || (startup_info[command_index].hStdOutput == INVALID_HANDLE_VALUE))
 		{
@@ -394,24 +500,17 @@ static int _main(const int argc, const LPWSTR *const argv)
 		}
 
 		const BOOL success = CreateProcessW(NULL, command[command_index], NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &startup_info[command_index], &process_info[command_index]);
+		const DWORD error_code = success ? ERROR_SUCCESS : GetLastError();
 
-		if(startup_info[command_index].hStdInput != std_inp)
-		{
-			CloseHandle(startup_info[command_index].hStdInput);
-			
-		}
-
-		if(startup_info[command_index].hStdOutput != std_out)
-		{
-			CloseHandle(startup_info[command_index].hStdOutput);
-		}
-
-		startup_info[command_index].hStdInput = startup_info[command_index].hStdOutput = NULL;
+		CloseHandle(startup_info[command_index].hStdInput);
+		startup_info[command_index].hStdInput = NULL;
+		CloseHandle(startup_info[command_index].hStdOutput);
+		startup_info[command_index].hStdOutput = NULL;
 
 		if(!success)
 		{
 			process_info[command_index].hProcess = process_info[command_index].hThread = NULL;
-			print_text_fmt(std_err, "Error: Failed to create process #%ld!\n", command_index + 1U);
+			print_text_fmt(std_err, "Error: Failed to create process #%ld! [Error: %ld]\n", command_index + 1U, error_code);
 			goto clean_up;
 		}
 	}
@@ -483,6 +582,16 @@ clean_up:
 		{
 			CloseHandle(pipe_wr[command_index]);
 		}
+	}
+
+	if((stream_inp != INVALID_HANDLE_VALUE) && (stream_inp != std_inp))
+	{
+		CloseHandle(stream_inp);
+	}
+
+	if((stream_out != INVALID_HANDLE_VALUE) && (stream_out != std_out))
+	{
+		CloseHandle(stream_out);
 	}
 
 	for(DWORD command_index = 0U; command_index < command_count; ++command_index)
