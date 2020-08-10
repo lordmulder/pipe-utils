@@ -74,11 +74,14 @@ static void print_help_screen(const HANDLE output)
 	print_text(output, "mkpipe v" VERSION_STR " [" __DATE__ "], by LoRd_MuldeR <MuldeR2@GMX.de>\n\n");
 	print_text(output, "Connect N processes via pipe(s), with configurable pipe buffer size.\n\n");
 	print_text(output, "Usage:\n");
-	print_text(output, "   mkpipe.exe <command_1> \"|\" <command_2> \"|\" ... \"|\" <command_n>\n");
-	print_text(output, "   mkpipe.exe \"<\" <input_file> [commands 1...n] \">\" <output_file>\n\n");
-	print_text(output, "Environment variable MKPIPE_BUFFSIZE can be used to override buffer size.\n");
-	print_text(output, "Default buffer size is " DEFAULT_PIPE_BUFFER_STR " bytes.\n\n");
-	print_text(output, "Operators '|', '<' and '>' must be *quoted* when running from the shell!\n\n");
+	print_text(output, "   mkpipe.exe [\"<\" infile] <command_1> \"|\" ... \"|\" <command_n> [\">\" outfile]\n\n");
+	print_text(output, "Examples:\n");
+	print_text(output, "   mkpipe.exe program1.exe -foo \"|\" program2.exe -bar\n");
+	print_text(output, "   mkpipe.exe \"<\" in.txt program1.exe -foo \"|\" program2.exe -bar \">\" out.txt\n\n");
+	print_text(output, "Use the environment variable MKPIPE_BUFFSIZE to override the buffer size.\n");
+	print_text(output, "Default buffer size, if not specified, is " DEFAULT_PIPE_BUFFER_STR " bytes.\n\n");
+	print_text(output, "The operators \"|\", \"<\" and \">\" must be *quoted* when running from the shell!\n");
+	print_text(output, "Otherwise, the shell (e.g. cmd.exe) itself interprets these operators.\n\n");
 }
 
 /* ======================================================================= */
@@ -429,9 +432,9 @@ static UINT _main(const int argc, const LPWSTR *const argv)
 		}
 	}
 
-	if(command_count < 2U)
+	if((command_count < 2U) && (!input_file) && (!output_file))
 	{
-		print_text(std_err, "Error: Must specify *at least* two commands!\n");
+		print_text(std_err, "Error: Must specify at least two commands or an input/output file!\n");
 		goto clean_up;
 	}
 
