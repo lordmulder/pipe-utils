@@ -22,6 +22,7 @@ mkdir "%~dp0.\out\~package\sse2"
 mkdir "%~dp0.\out\~package\x64"
 
 copy /Y "%~dp0.\*.txt"                        "%~dp0.\out\~package"
+copy /Y "%~dp0.\*.md"                         "%~dp0.\out\~package"
 copy /Y "%~dp0.\bin\Win32\Release\*.exe"      "%~dp0.\out\~package"
 copy /Y "%~dp0.\bin\Win32\Release_SSE2\*.exe" "%~dp0.\out\~package\sse2"
 copy /Y "%~dp0.\bin\x64\Release\*.exe"        "%~dp0.\out\~package\x64"
