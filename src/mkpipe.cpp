@@ -307,9 +307,9 @@ BOOL WINAPI ctrl_handler_routine(const DWORD type)
 /* Main                                                                    */
 /* ======================================================================= */
 
-static int _main(const int argc, const LPWSTR *const argv)
+static UINT _main(const int argc, const LPWSTR *const argv)
 {
-	int result = 1;
+	UINT result = 1U;
 	DWORD pipe_buffer_size = DEFAULT_PIPE_BUFFER, command_count = 0U;
 	WCHAR *command[MAX_PROCESSES], *input_file = NULL, *output_file = NULL;
 	HANDLE pipe_rd[MAX_PROCESSES - 1U], pipe_wr[MAX_PROCESSES - 1U];
@@ -541,21 +541,25 @@ static int _main(const int argc, const LPWSTR *const argv)
 	/* Wait for process termination                                           */
 	/* ---------------------------------------------------------------------- */
 
+	result = 0U;
+
 	for(DWORD command_index = 0U; command_index < command_count; ++command_index)
 	{
+		DWORD exit_code;
 		const HANDLE wait_handles[] =
 		{
 			process_info[command_index].hProcess, g_stopping
 		};
 		if(WaitForMultipleObjects(2U, wait_handles, FALSE, INFINITE) != WAIT_OBJECT_0)
 		{
+			result = 130U;
 			goto clean_up;
 		}
-		CloseHandle(process_info[command_index].hProcess);
-		process_info[command_index].hProcess = NULL;
+		if(GetExitCodeProcess(process_info[command_index].hProcess, &exit_code))
+		{
+			result = max(result, exit_code);
+		}
 	}
-
-	result = 0;
 
 	/* ---------------------------------------------------------------------- */
 	/* Final clean-up                                                         */

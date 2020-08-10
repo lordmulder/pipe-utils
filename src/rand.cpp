@@ -108,12 +108,13 @@ static void print_help_screen(const HANDLE output)
 /* Main                                                                    */
 /* ======================================================================= */
 
-static int _main(const int argc, const LPWSTR *const argv)
+static UINT _main(const int argc, const LPWSTR *const argv)
 {
 	random_t state;
 	g_stopping = CreateEventW(NULL, TRUE, FALSE, NULL);
-	BYTE check = 0U;
+	UINT result = 1U;
 	DWORD bytes_written = 0U;
+	BYTE check = 0U;
 
 	const HANDLE std_err = GetStdHandle(STD_ERROR_HANDLE);
 	const HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -121,16 +122,18 @@ static int _main(const int argc, const LPWSTR *const argv)
 	if((argc >= 2) && ((lstrcmpW(argv[1], L"-h") == 0) || (lstrcmpW(argv[1], L"-?") == 0) || (lstrcmpW(argv[1], L"/?") == 0)))
 	{
 		print_help_screen(std_err);
-		return 1;
+		goto exit_loop;
 	}
 
 	if (std_out == INVALID_HANDLE_VALUE)
 	{
 		print_text(std_err, "Error: Failed to initialize output stream!\n");
-		return 1;
+		goto exit_loop;
 	}
 
 	const bool is_pipe = (GetFileType(std_out) == FILE_TYPE_PIPE);
+
+	result = 0U;
 	random_seed(&state);
 
 	for(;;)
@@ -140,6 +143,7 @@ static int _main(const int argc, const LPWSTR *const argv)
 		{
 			if(WaitForSingleObject(g_stopping, 0U) == WAIT_OBJECT_0)
 			{
+				result = 130U;
 				goto exit_loop;
 			}
 		}
@@ -163,6 +167,7 @@ static int _main(const int argc, const LPWSTR *const argv)
 				{
 					if(WaitForSingleObject(g_stopping, 0U) == WAIT_OBJECT_0)
 					{
+						result = 130U;
 						goto exit_loop; /*stop*/
 					}
 					Sleep(sleep_timeout >> 8);
@@ -173,7 +178,7 @@ static int _main(const int argc, const LPWSTR *const argv)
 
 exit_loop:
 
-	return 0;
+	return result;
 }
 
 /* ======================================================================= */

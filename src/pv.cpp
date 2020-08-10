@@ -356,11 +356,13 @@ static void print_help_screen(const HANDLE output)
 /* Main                                                                    */
 /* ======================================================================= */
 
-static int _main(const int argc, const LPWSTR *const argv)
+static UINT _main(const int argc, const LPWSTR *const argv)
 {
-	LARGE_INTEGER time_now, time_ref, perf_freq;
+	UINT result = 1U;
 	HANDLE thread_read = NULL, thread_write = NULL;
 	LONG64 bytes_total = 0U;
+	DWORD wait_status = WAIT_FAILED;
+	LARGE_INTEGER time_now, time_ref, perf_freq;
 	double average_rate = -1.0;
 
 	const HANDLE std_inp = GetStdHandle(STD_INPUT_HANDLE);
@@ -438,12 +440,17 @@ static int _main(const int argc, const LPWSTR *const argv)
 	SetThreadPriority(thread_read,  THREAD_PRIORITY_ABOVE_NORMAL);
 	SetThreadPriority(thread_write, THREAD_PRIORITY_ABOVE_NORMAL);
 
-	const HANDLE wait_handles[] = { thread_read, thread_write, g_stopping };
-	while(WaitForMultipleObjects(3U, wait_handles, TRUE, 2500U) == WAIT_TIMEOUT)
+	const HANDLE wait_handles[] =
+	{
+		thread_read, thread_write, g_stopping
+	};
+
+	while((wait_status = WaitForMultipleObjects(3U, wait_handles, TRUE, 2500U)) == WAIT_TIMEOUT)
 	{
 		print_status(std_err, time_now, time_ref, perf_freq, average_rate, bytes_total);
 	}
 
+	result = (wait_status == WAIT_OBJECT_0 + 2U) ? 130U : 0U;
 	print_status(std_err, time_now, time_ref, perf_freq, average_rate, bytes_total);
 
 clean_up:
@@ -481,7 +488,7 @@ clean_up:
 		CloseHandle(g_stopping);
 	}
 
-	return 0;
+	return result;
 }
 
 /* ======================================================================= */
